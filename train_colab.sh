@@ -4,9 +4,14 @@ python main.py \
     --mode train \
     --exper-name m2max_fastUAR70_vitb32_wrs_logitadj_tau05_mi07_dc12_colab \
     --gpu 0 \
-    --epochs 50 \
+    --staged-training \
+    --epochs-stage1 1 \
+    --epochs-stage2 20 \
+    --epochs-stage3 20 \
+    --lr-stage1 0.001 \
+    --lr-stage2 1e-4 \
+    --lr-stage3 1e-5 \
     --batch-size 8 \
-    --lr 0.00003 \
     --lr-image-encoder 1e-06 \
     --lr-prompt-learner 0.001 \
     --lr-adapter 1e-5 \
