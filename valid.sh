@@ -2,7 +2,7 @@
 
 python main.py \
     --mode eval \
-    --gpu 2 \
+    --gpu 0 \
     --exper-name test_eval \
     --eval-checkpoint outputs/m2max_fastUAR70_vitb32_wrs_logitadj_tau05_mi07_dc12/model_best.pth \
     --root-dir /kaggle/input/raer-video-emotion-dataset/RAER \
