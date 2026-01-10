@@ -7,7 +7,6 @@ In this paper, we propose CLIP-CAER, a context-aware academic emotion recognitio
 
 This repository enhances the original CLIP-CAER by integrating several state-of-the-art techniques aimed at improving feature representation and handling data imbalance, targeting a UAR (Unweighted Average Recall) of over 70%.
 
-![image-20250702095507999](./imgs/pipeline.png)
 
 ## New Architecture Details
 
@@ -53,11 +52,7 @@ We provide the model weights trained by the method in this paper, which can be d
 **Important**: By downloading, accessing, or using the model weights, you agree to be bound by the terms and conditions of the license agreement located in the file weights/LICENSE-WEIGHTS.md, which permits use **only for non-commercial research purposes**. Please read the license carefully before downloading or using the weights.
 
 If you do not agree to the non-commercial use terms of the license, please do not download or use the model weights.
-## Performance
-![image-20250702095507999](./imgs/performance.png)
-## Visualizations
 
-![image-20250702095507999](./imgs/vsualizations.png)
 
 ## Environment
 
