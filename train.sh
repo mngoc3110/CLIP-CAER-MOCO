@@ -31,8 +31,8 @@ python main.py \
     --class-token-position end \
     --class-specific-contexts True \
     --load_and_tune_prompt_learner True \
-    --lambda_mi 0.7 \
-    --lambda_dc 1.2 \
+    --mi-loss-weight 0.7 \
+    --dc-loss-weight 1.2 \
     --slerp-weight 0.5 \
     --logit-adj \
     --logit-adj-tau 0.5 \
