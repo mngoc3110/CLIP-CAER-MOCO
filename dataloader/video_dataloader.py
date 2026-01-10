@@ -31,7 +31,7 @@ class VideoRecord(object):
         return int(self._data[2])
 
 class VideoDataset(data.Dataset):
-    def __init__(self, list_file, num_segments, duration, mode, transform, image_size,bounding_box_face,bounding_box_body, crop_body=False):
+    def __init__(self, list_file, num_segments, duration, mode, transform, image_size,bounding_box_face,bounding_box_body, crop_body=False, root_dir=""):
         self.list_file = list_file
         self.duration = duration
         self.num_segments = num_segments
@@ -41,6 +41,7 @@ class VideoDataset(data.Dataset):
         self.bounding_box_face = bounding_box_face
         self.bounding_box_body = bounding_box_body
         self.crop_body = crop_body
+        self.root_dir = root_dir
         self._read_sample()
         self._parse_list()
         self._read_boxs()
@@ -54,8 +55,9 @@ class VideoDataset(data.Dataset):
 
     
     def _read_body_boxes(self):
-        with open(self.bounding_box_body, 'r') as f:
-            self.body_boxes = json.load(f)
+        if self.bounding_box_body:
+            with open(self.bounding_box_body, 'r') as f:
+                self.body_boxes = json.load(f)
 
 
     def _cv2pil(self,im_cv):
@@ -115,7 +117,7 @@ class VideoDataset(data.Dataset):
         #
         # Data Form: [video_id, num_frames, class_idx]
         #
-        self.video_list = [VideoRecord(item) for item in self.sample_list]
+        self.video_list = [VideoRecord([os.path.join(self.root_dir, item[0])] + item[1:]) for item in self.sample_list]
         print(('video number:%d' % (len(self.video_list))))
 
     def _get_train_indices(self, record):
@@ -169,7 +171,7 @@ class VideoDataset(data.Dataset):
         for seg_ind in indices:
             p = int(seg_ind)
             for i in range(self.duration):
-                img_path = os.path.join(record.path, video_frames_path[p]) # Assuming video_frames_path is just filenames
+                img_path = video_frames_path[p]
                 parent_dir = os.path.dirname(img_path)
                 file_name = os.path.basename(img_path)
 
@@ -218,7 +220,7 @@ class VideoDataset(data.Dataset):
         return len(self.video_list)
 
 
-def train_data_loader(list_file, num_segments, duration, image_size,dataset_name,bounding_box_face,bounding_box_body, crop_body=False):
+def train_data_loader(root_dir, list_file, num_segments, duration, image_size,dataset_name,bounding_box_face,bounding_box_body, crop_body=False):
     if dataset_name == "RAER":
          train_transforms = torchvision.transforms.Compose([
             RandomRotation(4),
@@ -228,7 +230,7 @@ def train_data_loader(list_file, num_segments, duration, image_size,dataset_name
             ToTorchFormatTensor()])
             
     
-    train_data = VideoDataset(list_file=list_file,
+    train_data = VideoDataset(root_dir=root_dir, list_file=list_file,
                               num_segments=num_segments, #16
                               duration=duration, #1
                               mode='train',
@@ -241,13 +243,13 @@ def train_data_loader(list_file, num_segments, duration, image_size,dataset_name
     return train_data
 
 
-def test_data_loader(list_file, num_segments, duration, image_size,bounding_box_face,bounding_box_body, crop_body=False):
+def test_data_loader(root_dir, list_file, num_segments, duration, image_size,bounding_box_face,bounding_box_body, crop_body=False):
     
     test_transform = torchvision.transforms.Compose([GroupResize(image_size),
                                                      Stack(),
                                                      ToTorchFormatTensor()])
     
-    test_data = VideoDataset(list_file=list_file,
+    test_data = VideoDataset(root_dir=root_dir, list_file=list_file,
                              num_segments=num_segments,
                              duration=duration,
                              mode='test',
