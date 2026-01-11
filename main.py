@@ -69,7 +69,6 @@ train_group.add_argument('--grad-clip', type=float, default=1.0, help='Gradient 
 # --- Optimizer & Learning Rate ---
 optim_group = parser.add_argument_group('Optimizer & LR', 'Hyperparameters for the optimizer and scheduler')
 optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use.')
-optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use (SGD or AdamW).')
 optim_group.add_argument('--lr', type=float, default=1e-5, help='Initial learning rate for main modules (temporal, project_fc).')
 optim_group.add_argument('--lr-image-encoder', type=float, default=0.0, help='Learning rate for the image encoder part (set to 0 to freeze).')
 optim_group.add_argument('--lr-prompt-learner', type=float, default=1e-5, help='Learning rate for the prompt learner.')
