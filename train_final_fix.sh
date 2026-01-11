@@ -2,10 +2,10 @@
 
 python main.py \
     --mode train \
-    --exper-name final_fix_adamw_focal_sampler \
+    --exper-name final_fix_adamw_focal_sampler_no_slerp \
     --gpu 0 \
     --epochs 50 \
-    --batch-size 16 \
+    --batch-size 8 \
     --optimizer AdamW \
     --lr 1e-5 \
     --lr-image-encoder 0.0 \
@@ -39,7 +39,7 @@ python main.py \
     --mi-ramp 10 \
     --dc-warmup 10 \
     --dc-ramp 15 \
-    --slerp-weight 0.5 \
+    --slerp-weight 0.0 \
     --temperature 0.2 \
     --label-smoothing 0.02 \
     --use-amp \
