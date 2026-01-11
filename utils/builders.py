@@ -18,8 +18,14 @@ def build_model(args: argparse.Namespace, input_text: list) -> torch.nn.Module:
     CLIP_model, _ = clip.load(args.clip_path, device='cpu')
 
     print("\nInput Text Prompts:")
-    for text in input_text:
-        print(text)
+    # Handle the case where input_text is a list of lists for prompt ensembling
+    if any(isinstance(i, list) for i in input_text):
+        for class_prompts in input_text:
+            print(f"- Class: {class_prompts}")
+    else:
+        for text in input_text:
+            print(text)
+
 
     print("\nInstantiating GenerateModel...")
     model = GenerateModel(input_text=input_text, clip_model=CLIP_model, args=args)
@@ -58,6 +64,7 @@ def get_class_info(args: argparse.Namespace) -> Tuple[list, list]:
         class_names = ['Neutrality', 'Enjoyment', 'Confusion', 'Fatigue', 'Distraction.']
         class_names_with_context = class_names_with_context_5
         class_descriptor = class_descriptor_5
+        ensemble_prompts = prompt_ensemble_5
     else:
         raise NotImplementedError(f"Dataset '{args.dataset}' is not implemented yet.")
 
@@ -67,6 +74,8 @@ def get_class_info(args: argparse.Namespace) -> Tuple[list, list]:
         input_text = class_names_with_context
     elif args.text_type == "class_descriptor":
         input_text = class_descriptor
+    elif args.text_type == "prompt_ensemble":
+        input_text = ensemble_prompts
     else:
         raise ValueError(f"Unknown text_type: {args.text_type}")
 

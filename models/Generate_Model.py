@@ -6,13 +6,24 @@ from models.Adapter import Adapter
 from clip import clip
 from utils.utils import slerp
 import copy
+import itertools
 
 class GenerateModel(nn.Module):
     def __init__(self, input_text, clip_model, args):
         super().__init__()
         self.args = args
-        self.input_text = input_text
-        self.prompt_learner = PromptLearner(input_text, clip_model, args)
+        
+        self.is_ensemble = any(isinstance(i, list) for i in input_text)
+        
+        if self.is_ensemble:
+            self.num_classes = len(input_text)
+            self.num_prompts_per_class = len(input_text[0])
+            self.input_text = list(itertools.chain.from_iterable(input_text))
+            print(f"=> Using Prompt Ensembling with {self.num_prompts_per_class} prompts per class.")
+        else:
+            self.input_text = input_text
+
+        self.prompt_learner = PromptLearner(self.input_text, clip_model, args)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.text_encoder = TextEncoder(clip_model)
         self.dtype = clip_model.dtype
@@ -74,14 +85,28 @@ class GenerateModel(nn.Module):
         text_features = self.text_encoder(prompts, tokenized_prompts)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-        # Hand-crafted prompts
+        # Hand-crafted prompts (for MI Loss, not used for classification)
         hand_crafted_prompts = self.hand_crafted_prompt_embeddings
         tokenized_hand_crafted_prompts = self.tokenized_hand_crafted_prompts.to(hand_crafted_prompts.device)
         hand_crafted_text_features = self.text_encoder(hand_crafted_prompts, tokenized_hand_crafted_prompts)
         hand_crafted_text_features = hand_crafted_text_features / hand_crafted_text_features.norm(dim=-1, keepdim=True)
 
-        ################# IEC ###################
-        if self.args.slerp_weight > 0:
+        ################# Classification ###################
+        # Calculate logits
+        if self.is_ensemble:
+            # Reshape text features for ensembling: (C*P, D) -> (C, P, D)
+            text_features = text_features.view(self.num_classes, self.num_prompts_per_class, -1)
+            # Normalize again just in case (optional but safe)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            
+            # Compute logits per prompt: (B, D) @ (D, P, C) -> (B, P, C)
+            # Note: We use einsum for clarity with batch and ensemble dimensions
+            logits = torch.einsum('bd,cpd->bcp', video_features, text_features)
+            
+            # Average the logits across the prompts for each class
+            output = torch.mean(logits, dim=2) / self.args.temperature
+
+        elif self.args.slerp_weight > 0:
             video_features_expanded = video_features.unsqueeze(1).expand(-1, hand_crafted_text_features.shape[0], -1)
             text_features_expanded = hand_crafted_text_features.unsqueeze(0).expand(video_features.shape[0], -1, -1)
             

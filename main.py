@@ -68,7 +68,7 @@ train_group.add_argument('--grad-clip', type=float, default=1.0, help='Gradient 
 
 # --- Optimizer & Learning Rate ---
 optim_group = parser.add_argument_group('Optimizer & LR', 'Hyperparameters for the optimizer and scheduler')
-optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use.')
+optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use (SGD or AdamW).')
 optim_group.add_argument('--lr', type=float, default=1e-5, help='Initial learning rate for main modules (temporal, project_fc).')
 optim_group.add_argument('--lr-image-encoder', type=float, default=0.0, help='Learning rate for the image encoder part (set to 0 to freeze).')
 optim_group.add_argument('--lr-prompt-learner', type=float, default=1e-5, help='Learning rate for the prompt learner.')
@@ -94,7 +94,7 @@ loss_group.add_argument('--label-smoothing', type=float, default=0.05, help='Lab
 
 # --- Model & Input ---
 model_group = parser.add_argument_group('Model & Input', 'Parameters for model architecture and data handling')
-model_group.add_argument('--text-type', default='class_descriptor', choices=['class_names', 'class_names_with_context', 'class_descriptor'], help='Type of text prompts to use.')
+model_group.add_argument('--text-type', default='class_descriptor', choices=['class_names', 'class_names_with_context', 'class_descriptor', 'prompt_ensemble'], help='Type of text prompts to use.')
 model_group.add_argument('--temporal-layers', type=int, default=1, help='Number of layers in the temporal modeling part.')
 model_group.add_argument('--contexts-number', type=int, default=12, help='Number of context vectors in the prompt learner.')
 model_group.add_argument('--class-token-position', type=str, default="end", help='Position of the class token in the prompt.')
@@ -222,7 +222,7 @@ def run_training(args: argparse.Namespace) -> None:
     if args.optimizer == 'SGD':
         optimizer = torch.optim.SGD(optimizer_grouped_parameters, momentum=args.momentum, weight_decay=args.weight_decay)
     elif args.optimizer == 'AdamW':
-        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, weight_decay=args.weight_decay)
     else:
         raise ValueError(f"Optimizer {args.optimizer} not supported.")
 
@@ -274,7 +274,8 @@ def run_training(args: argparse.Namespace) -> None:
         recorder.update(epoch, train_los, train_war, train_uar, val_los, val_war, val_uar)
         recorder.plot_curve(log_curve_path)
         
-        log_msg = (f'\n'
+        log_msg = (
+                   f'\n'
                    f'--- Epoch {epoch} Summary ---\n'
                    f'Train WAR: {train_war:.2f}% | Train UAR: {train_uar:.2f}%\n'
                    f'Valid WAR: {val_war:.2f}% | Valid UAR: {val_uar:.2f}%\n'
