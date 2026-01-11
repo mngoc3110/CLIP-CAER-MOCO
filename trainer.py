@@ -4,6 +4,8 @@ import torch
 import numpy as np
 from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
+import os
+import torchvision
 
 from utils.utils import AverageMeter, ProgressMeter, get_loss_weight
 
@@ -36,6 +38,31 @@ class Trainer:
         self.grad_clip = grad_clip
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
+        
+        # Create directory for saving debug prediction images
+        self.debug_predictions_path = 'debug_predictions'
+        os.makedirs(self.debug_predictions_path, exist_ok=True)
+
+    def _save_debug_image(self, tensor, prediction, target, epoch_str, batch_idx, img_idx):
+        """Saves a single image tensor for debugging, with prediction and target in the filename."""
+        # Un-normalize the image
+        # These are common normalization values for ImageNet, adjust if yours are different
+        mean = torch.tensor([0.485, 0.456, 0.406], device=tensor.device).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=tensor.device).view(3, 1, 1)
+        tensor = tensor * std + mean
+        tensor = torch.clamp(tensor, 0, 1)
+
+        # Create a directory for the current epoch if it doesn't exist
+        epoch_debug_path = os.path.join(self.debug_predictions_path, f"epoch_{epoch_str}")
+        os.makedirs(epoch_debug_path, exist_ok=True)
+        
+        # Construct filename
+        filename = f"batch_{batch_idx}_img_{img_idx}_pred_{prediction}_true_{target}.png"
+        filepath = os.path.join(epoch_debug_path, filename)
+        
+        # Save the image
+        torchvision.utils.save_image(tensor, filepath)
+
 
     def _run_one_epoch(self, loader, epoch_str, is_train=True):
         """Runs one epoch of training or validation."""
@@ -66,11 +93,17 @@ class Trainer:
 
         all_preds = []
         all_targets = []
+        saved_images_count = 0
+
 
         context = torch.enable_grad() if is_train else torch.no_grad()
         
         with context:
             for i, (images_face, images_body, target) in enumerate(loader):
+                # Debugging: Print batch information
+                if is_train:
+                    print(f"--> Batch {i}, Size: {target.size(0)}, Labels: {target.tolist()}")
+
                 images_face = images_face.to(self.device)
                 images_body = images_body.to(self.device)
                 target = target.to(self.device)
@@ -124,6 +157,22 @@ class Trainer:
 
                 all_preds.append(preds.cpu())
                 all_targets.append(target.cpu())
+
+                if not is_train and saved_images_count < 32:
+                    for img_idx in range(images_face.size(0)):
+                        if saved_images_count < 32:
+                            self._save_debug_image(
+                                images_face[img_idx].cpu(),
+                                preds[img_idx].item(),
+                                target[img_idx].item(),
+                                epoch_str,
+                                i,
+                                img_idx
+                            )
+                            saved_images_count += 1
+                        else:
+                            break
+
 
                 if i % self.print_freq == 0:
                     progress.display(i)

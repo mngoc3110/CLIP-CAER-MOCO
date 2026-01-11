@@ -31,7 +31,7 @@ class VideoRecord(object):
         return int(self._data[2])
 
 class VideoDataset(data.Dataset):
-    def __init__(self, list_file, num_segments, duration, mode, transform, image_size,bounding_box_face,bounding_box_body, crop_body=False, root_dir=""):
+    def __init__(self, list_file, num_segments, duration, mode, transform, image_size,bounding_box_face,bounding_box_body, crop_body=False, root_dir="", num_classes=8):
         self.list_file = list_file
         self.duration = duration
         self.num_segments = num_segments
@@ -42,6 +42,12 @@ class VideoDataset(data.Dataset):
         self.bounding_box_body = bounding_box_body
         self.crop_body = crop_body
         self.root_dir = root_dir
+        
+        # Debugging: Initialize for saving sample images
+        self.debug_samples_path = 'debug_samples'
+        os.makedirs(self.debug_samples_path, exist_ok=True)
+        self._saved_samples = {i: 0 for i in range(num_classes)}
+        
         self._read_sample()
         self._parse_list()
         self._read_boxs()
@@ -184,8 +190,17 @@ class VideoDataset(data.Dataset):
                     box = None
 
                 img_pil = Image.open(img_path)
-                img_pil_face = Image.open(img_path)
-                
+                img_pil_face = self._face_detect(Image.open(img_path), box, margin=20, mode='face')
+
+                # Debugging: Save sample images
+                current_label = record.label - 1
+                if self.mode == 'train' and self._saved_samples.get(current_label, 0) < 5:
+                    sample_path = os.path.join(self.debug_samples_path, f'class_{current_label}')
+                    os.makedirs(sample_path, exist_ok=True)
+                    img_name = f'sample_{self._saved_samples[current_label]}_{os.path.basename(record.path)}_{file_name}'
+                    img_pil_face.save(os.path.join(sample_path, img_name))
+                    self._saved_samples[current_label] += 1
+
                 if self.crop_body:
                     body_box_path = parent_dir
                     body_box = self.body_boxes[body_box_path] if body_box_path in self.body_boxes else None
@@ -202,7 +217,7 @@ class VideoDataset(data.Dataset):
                 img_pil_body = self._cv2pil(img_cv_body)
                 seg_imgs = [img_pil_body]
                 
-                seg_imgs_face = [self._face_detect(img_pil_face,box,margin=20,mode='face')]
+                seg_imgs_face = [img_pil_face]
 
                 images.extend(seg_imgs)
                 images_face.extend(seg_imgs_face)
@@ -220,7 +235,7 @@ class VideoDataset(data.Dataset):
         return len(self.video_list)
 
 
-def train_data_loader(root_dir, list_file, num_segments, duration, image_size,dataset_name,bounding_box_face,bounding_box_body, crop_body=False):
+def train_data_loader(root_dir, list_file, num_segments, duration, image_size,dataset_name,bounding_box_face,bounding_box_body, crop_body=False, num_classes=8):
     if dataset_name == "RAER":
          train_transforms = torchvision.transforms.Compose([
             RandomRotation(4),
@@ -238,12 +253,13 @@ def train_data_loader(root_dir, list_file, num_segments, duration, image_size,da
                               image_size=image_size,
                               bounding_box_face=bounding_box_face,
                               bounding_box_body=bounding_box_body,
-                              crop_body=crop_body
+                              crop_body=crop_body,
+                              num_classes=num_classes
                               )
     return train_data
 
 
-def test_data_loader(root_dir, list_file, num_segments, duration, image_size,bounding_box_face,bounding_box_body, crop_body=False):
+def test_data_loader(root_dir, list_file, num_segments, duration, image_size,bounding_box_face,bounding_box_body, crop_body=False, num_classes=8):
     
     test_transform = torchvision.transforms.Compose([GroupResize(image_size),
                                                      Stack(),
@@ -257,6 +273,7 @@ def test_data_loader(root_dir, list_file, num_segments, duration, image_size,bou
                              image_size=image_size,
                              bounding_box_face=bounding_box_face,
                              bounding_box_body=bounding_box_body,
-                             crop_body=crop_body
+                             crop_body=crop_body,
+                             num_classes=num_classes
                              )
     return test_data
