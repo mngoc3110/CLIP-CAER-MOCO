@@ -69,6 +69,7 @@ train_group.add_argument('--grad-clip', type=float, default=1.0, help='Gradient 
 # --- Optimizer & Learning Rate ---
 optim_group = parser.add_argument_group('Optimizer & LR', 'Hyperparameters for the optimizer and scheduler')
 optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use.')
+optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use (SGD or AdamW).')
 optim_group.add_argument('--lr', type=float, default=1e-5, help='Initial learning rate for main modules (temporal, project_fc).')
 optim_group.add_argument('--lr-image-encoder', type=float, default=0.0, help='Learning rate for the image encoder part (set to 0 to freeze).')
 optim_group.add_argument('--lr-prompt-learner', type=float, default=1e-5, help='Learning rate for the prompt learner.')
@@ -209,14 +210,22 @@ def run_training(args: argparse.Namespace) -> None:
         class_priors = class_priors.to(args.device)
 
     recorder = RecorderMeter(args.epochs)
-    optimizer = torch.optim.SGD([
+    
+    optimizer_grouped_parameters = [
         {"params": model.temporal_net.parameters(), "lr": args.lr},
         {"params": model.temporal_net_body.parameters(), "lr": args.lr},
         {"params": model.image_encoder.parameters(), "lr": args.lr_image_encoder},
         {"params": model.prompt_learner.parameters(), "lr": args.lr_prompt_learner},
         {"params": model.project_fc.parameters(), "lr": args.lr},
         {"params": model.face_adapter.parameters(), "lr": args.lr_adapter}
-    ], momentum=args.momentum, weight_decay=args.weight_decay)
+    ]
+
+    if args.optimizer == 'SGD':
+        optimizer = torch.optim.SGD(optimizer_grouped_parameters, momentum=args.momentum, weight_decay=args.weight_decay)
+    elif args.optimizer == 'AdamW':
+        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        raise ValueError(f"Optimizer {args.optimizer} not supported.")
 
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
     trainer = Trainer(model, criterion, optimizer, scheduler, args.device, log_txt_path, 
