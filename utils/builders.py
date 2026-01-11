@@ -27,7 +27,15 @@ def build_model(args: argparse.Namespace, input_text: list) -> torch.nn.Module:
     for name, param in model.named_parameters():
         param.requires_grad = False
 
-    trainable_params_keywords = ["image_encoder", "temporal_net", "prompt_learner", "temporal_net_body", "project_fc", "face_adapter"]
+    # Freeze CLIP image encoder if lr_image_encoder is 0
+    # Otherwise, make it trainable.
+    if args.lr_image_encoder > 0:
+        for name, param in model.named_parameters():
+            if "image_encoder" in name:
+                param.requires_grad = True
+
+    trainable_params_keywords = ["temporal_net", "prompt_learner", "temporal_net_body", "project_fc", "face_adapter"]
+    
     print('\nTrainable parameters:')
     for name, param in model.named_parameters():
         if any(keyword in name for keyword in trainable_params_keywords):

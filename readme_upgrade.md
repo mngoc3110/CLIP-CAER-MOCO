@@ -34,64 +34,49 @@ Cả hai luồng đều được xử lý bởi cùng một bộ mã hóa hình 
 - **Công thức:** `t_mix(k) = slerp(t_desc(k), z, λ_slerp)`, trong đó `t_desc(k)` là prompt mô tả cho lớp `k`, `z` là embedding thị giác của mẫu video, và `λ_slerp` là một trọng số có thể điều chỉnh.
 - Việc phân loại cuối cùng được thực hiện bằng cách tính toán độ tương đồng giữa embedding thị giác `z` và các text prototype đã được trộn `t_mix` này.
 
-### 6. Hàm Loss Tổng hợp và các Chiến lược Huấn luyện Nâng cao
-Mô hình được huấn luyện với một hàm loss tổng hợp và nhiều kỹ thuật tiên tiến:
+### 6. Chiến lược Huấn luyện Ổn định (Stable Training Strategy)
+Để chống lại hiện tượng "sập" mô hình (model collapse) khi huấn luyện các kiến trúc phức tạp, một chiến lược huấn luyện end-to-end an toàn được áp dụng:
 `L_total = L_classification + (weight_mi * L_mi) + (weight_dc * L_dc)`
-- **`L_classification`**: Hàm loss cross-entropy tiêu chuẩn. Hỗ trợ nhiều cơ chế xử lý mất cân bằng dữ liệu:
-    - **Class-Balanced Loss:** Tự động gán trọng số cao hơn cho các lớp thiểu số. Kích hoạt bằng cờ `--class-balanced-loss`.
-    - **Logit Adjustment:** Điều chỉnh trực tiếp đầu ra logit của mô hình dựa trên tần suất xuất hiện của các lớp. Kích hoạt bằng cờ `--logit-adj`.
-    - **WeightedRandomSampler:** Lấy mẫu các batch huấn luyện một cách có trọng số để đảm bảo các lớp thiểu số xuất hiện nhiều hơn. Kích hoạt bằng cờ `--use-weighted-sampler`.
-    - **Label Smoothing:** Kỹ thuật regularize giúp giảm sự tự tin thái quá của mô hình. Kích hoạt bằng `--label-smoothing [0.0...1.0]`.
-- **`L_mi` (Mutual Information Loss)**: Regularize quá trình học prompt. Trọng số được điều khiển bởi `--lambda_mi`.
-- **`L_dc` (Decorrelation Loss)**: Khuyến khích các prompt của các lớp khác nhau trở nên khác biệt. Trọng số được điều khiển bởi `--lambda_dc`.
-- **Loss Warmup & Ramp-up:** Trọng số của MI loss và DC loss được tăng dần trong quá trình huấn luyện để tăng tính ổn định, được điều khiển bởi các tham số `--mi-warmup`, `--mi-ramp`, `--dc-warmup`, `--dc-ramp`.
-- **Automatic Mixed Precision (AMP):** Tăng tốc độ huấn luyện và giảm bộ nhớ GPU bằng cách sử dụng độ chính xác 16-bit. Kích hoạt bằng cờ `--use-amp`.
-- **Gradient Clipping:** Giới hạn độ lớn của gradient để ngăn chặn hiện tượng "bùng nổ gradient" và ổn định quá trình huấn luyện. Kích hoạt bằng `--grad-clip [giá trị]`.
+- **Đóng băng CLIP Encoder:** Bộ mã hóa hình ảnh gốc của CLIP (`image_encoder`) được đóng băng hoàn toàn (`lr=0`) để tạo ra một backbone trích xuất đặc trưng ổn định, tránh nguy cơ bất ổn lớn nhất.
+- **Learning Rate Thấp và Thống nhất:** Sử dụng một learning rate chung và rất thấp (ví dụ `1e-5`) cho tất cả các module mới (Adapter, Prompt Learner, Temporal) để đảm bảo không có thành phần nào học quá nhanh và gây bất ổn.
+- **Loss Warmup Kéo dài:** Tăng thời gian "khởi động" cho MI và DC loss (ví dụ: `--mi-warmup 5`). Trong các epoch đầu, mô hình sẽ chỉ tập trung vào hàm loss phân loại chính, giúp nó hội tụ một cách ổn định trước khi các hàm loss phức tạp hơn được thêm vào.
+- **Gradient Clipping:** Luôn bật để giới hạn độ lớn tối đa của gradient, hoạt động như một "lưới an toàn" để ngăn các cập nhật trọng số đột biến gây sập mô hình.
 
-### 7. Huấn luyện theo giai đoạn (Staged Training)
-Để đảm bảo quá trình huấn luyện ổn định hơn và hội tụ tốt hơn cho các mô hình phức tạp, kỹ thuật huấn luyện theo giai đoạn đã được triển khai. Quá trình này chia việc huấn luyện thành ba giai đoạn chính, mỗi giai đoạn tập trung vào việc huấn luyện một tập hợp các tham số khác nhau của mô hình:
-
--   **Giai đoạn 1: Huấn luyện Prompt Learner.** Chỉ huấn luyện các prompt có thể học (`learnable prompt`). Tất cả các phần khác của mô hình (bộ mã hóa ảnh, adapter, các lớp temporal) sẽ bị đóng băng. Mục tiêu là giúp các prompt text học cách liên kết với các đặc trưng thị giác cơ bản một cách ổn định.
--   **Giai đoạn 2: Huấn luyện Adapter và các Module Temporal.** Prompt learner đã được huấn luyện và bộ mã hóa ảnh được đóng băng, sau đó Adapter, Temporal Models và lớp Fusion được huấn luyện. Giai đoạn này giúp các module thị giác học cách trích xuất các đặc trưng không gian-thời gian quan trọng.
--   **Giai đoạn 3: Tinh chỉnh Toàn bộ (End-to-End Fine-tuning).** Tất cả các thành phần của mô hình được mở băng và huấn luyện cùng nhau với một learning rate rất nhỏ để tất cả các module có thể phối hợp với nhau một cách tốt nhất.
-
-### 8. Logging chi tiết
-Quá trình huấn luyện giờ đây sẽ in ra các thông tin chi tiết hơn sau mỗi epoch, bao gồm:
--   `Train WAR`, `Train UAR` của epoch hiện tại.
--   `Valid WAR`, `Valid UAR` của epoch hiện tại.
--   `Best Train WAR`, `Best Train UAR` tốt nhất từ đầu đến giờ.
--   `Best Valid WAR`, `Best Valid UAR` tốt nhất từ đầu đến giờ.
--   Ma trận nhầm lẫn (Confusion Matrix) của tập validation sau mỗi epoch.
+### 7. Logging chi tiết và Biểu đồ
+Quá trình huấn luyện giờ đây sẽ in ra và lưu lại các thông tin chi tiết hơn sau mỗi epoch:
+- **Biểu đồ:** Một file `log.png` được tạo ra, vẽ biểu đồ của **Train/Valid Loss**, **Train/Valid WAR**, và **Train/Valid UAR** qua các epoch.
+- **Thông số Console:**
+    -   `Train WAR`, `Train UAR` của epoch hiện tại.
+    -   `Valid WAR`, `Valid UAR` của epoch hiện tại.
+    -   `Best Train/Valid WAR/UAR` tốt nhất từ đầu đến giờ.
+    -   Ma trận nhầm lẫn (Confusion Matrix) của tập validation sau mỗi epoch.
 
 ## Hướng dẫn Sử dụng
 
 Quá trình huấn luyện có thể được tùy chỉnh với các tham số dòng lệnh mới để điều khiển các tính năng nâng cao.
 
-### Local
+### Local (MacOS)
 ```bash
-bash train.sh
+bash train_local.sh
 ```
+File này được cấu hình để chạy với `--gpu mps`. Bạn cần chỉnh sửa đường dẫn trong file cho phù hợp với máy của mình.
 
-### Google Colab
+### Google Colab / Linux
 ```bash
 bash train_colab.sh
 ```
+File này được cấu hình để chạy với GPU CUDA (`--gpu 0`).
 
-Bạn có thể chỉnh sửa các file `.sh` hoặc truyền trực tiếp tham số vào `main.py`. Các tham số quan trọng đã được thêm vào:
-- `--staged-training`: (cờ) Bật chế độ huấn luyện theo giai đoạn.
-- `--epochs-stage1`, `--epochs-stage2`, `--epochs-stage3` (int): Số epoch cho mỗi giai đoạn.
-- `--lr-stage1`, `--lr-stage2`, `--lr-stage3` (float): Tốc độ học cho mỗi giai đoạn.
-- `--lambda_mi` (float): Trọng số cho Mutual Information loss.
-- `--lambda_dc` (float): Trọng số cho Decorrelation loss.
-- `--mi-warmup`, `--mi-ramp`, `--dc-warmup`, `--dc-ramp` (int): Các tham số cho việc warmup và ramp-up loss.
-- `--lr-adapter` (float): Tốc độ học (learning rate) cho Expression-aware Adapter.
-- `--slerp-weight` (float): Hệ số nội suy cho Instance-enhanced Classifier. Đặt bằng `0` để tắt IEC.
-- `--temperature` (float): Nhiệt độ (tau) cho lớp phân loại cuối cùng.
-- `--class-balanced-loss`: (cờ) Bật để sử dụng loss được cân bằng theo lớp.
-- `--logit-adj`: (cờ) Bật để sử dụng Logit Adjustment.
-- `--logit-adj-tau` (float): Hệ số nhiệt độ cho Logit Adjustment.
-- `--use-weighted-sampler`: (cờ) Bật để sử dụng `WeightedRandomSampler`.
-- `--label-smoothing` (float): Hệ số làm mượt nhãn (label smoothing).
-- `--use-amp`: (cờ) Bật để sử dụng Automatic Mixed Precision.
-- `--grad-clip` (float): Giá trị giới hạn cho gradient clipping (ví dụ: 1.0).
+### Các tham số chính
+- `--lr`: Learning rate chung cho các module chính (khuyến nghị: `1e-5`).
+- `--lr-image-encoder`: Learning rate cho bộ mã hóa ảnh (khuyến nghị: `0.0` để đóng băng).
+- `--lr-prompt-learner`: Learning rate cho prompt learner (khuyến nghị: `1e-5`).
+- `--lr-adapter`: Learning rate cho adapter (khuyến nghị: `1e-5`).
+- `--lambda_mi`: Trọng số cho Mutual Information loss (ví dụ: `0.7`).
+- `--lambda_dc`: Trọng số cho Decorrelation loss (ví dụ: `1.2`).
+- `--mi-warmup`, `--dc-warmup` (int): Số epoch "khởi động" cho loss (khuyến nghị: `5`).
+- `--grad-clip` (float): Giá trị giới hạn cho gradient clipping (khuyến nghị: `1.0`).
+- `--use-amp`: (cờ) Bật để sử dụng Automatic Mixed Precision (chỉ hoạt động trên CUDA).
 - `--crop-body`: (cờ) Bật để cắt vùng body thay vì dùng toàn bộ khung hình.
+- `--use-weighted-sampler`: (cờ) Bật để sử dụng `WeightedRandomSampler` xử lý mất cân bằng dữ liệu.
+- `--logit-adj`: (cờ) Bật để sử dụng Logit Adjustment.

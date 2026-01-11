@@ -44,7 +44,7 @@ exp_group.add_argument('--eval-checkpoint', type=str,
                        help="Path to the model checkpoint for evaluation mode (e.g., outputs/exp_name/model_best.pth).")
 exp_group.add_argument('--exper-name', type=str, default='test', help='A name for the experiment to create a unique output folder.')
 exp_group.add_argument('--dataset', type=str, default='RAER', help='Name of the dataset to use.')
-exp_group.add_argument('--gpu', type=int, default=2, help='ID of the GPU to use.')
+exp_group.add_argument('--gpu', type=str, default='0', help='ID of the GPU to use (e.g., 0, 1) or "mps" for Apple Silicon.')
 exp_group.add_argument('--workers', type=int, default=4, help='Number of data loading workers.')
 exp_group.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
 
@@ -68,9 +68,9 @@ train_group.add_argument('--grad-clip', type=float, default=1.0, help='Gradient 
 
 # --- Optimizer & Learning Rate ---
 optim_group = parser.add_argument_group('Optimizer & LR', 'Hyperparameters for the optimizer and scheduler')
-optim_group.add_argument('--lr', type=float, default=0.0003, help='Initial learning rate for main modules.')
-optim_group.add_argument('--lr-image-encoder', type=float, default=1e-6, help='Learning rate for the image encoder part.')
-optim_group.add_argument('--lr-prompt-learner', type=float, default=0.001, help='Learning rate for the prompt learner.')
+optim_group.add_argument('--lr', type=float, default=1e-5, help='Initial learning rate for main modules (temporal, project_fc).')
+optim_group.add_argument('--lr-image-encoder', type=float, default=0.0, help='Learning rate for the image encoder part (set to 0 to freeze).')
+optim_group.add_argument('--lr-prompt-learner', type=float, default=1e-5, help='Learning rate for the prompt learner.')
 optim_group.add_argument('--lr-adapter', type=float, default=1e-5, help='Learning rate for the adapter.')
 optim_group.add_argument('--weight-decay', type=float, default=0.0001, help='Weight decay for the optimizer.')
 optim_group.add_argument('--momentum', type=float, default=0.9, help='Momentum for the SGD optimizer.')
@@ -81,7 +81,7 @@ optim_group.add_argument('--gamma', type=float, default=0.1, help='Factor for le
 loss_group = parser.add_argument_group('Loss & Imbalance Handling', 'Parameters for loss functions and imbalance handling')
 loss_group.add_argument('--lambda_mi', type=float, default=0.7, help='Weight for the Mutual Information loss.')
 loss_group.add_argument('--lambda_dc', type=float, default=1.2, help='Weight for the Decorrelation loss.')
-loss_group.add_argument('--mi-warmup', type=int, default=3, help='Warmup epochs for MI loss.')
+loss_group.add_argument('--mi-warmup', type=int, default=5, help='Warmup epochs for MI loss.')
 loss_group.add_argument('--mi-ramp', type=int, default=8, help='Ramp-up epochs for MI loss.')
 loss_group.add_argument('--dc-warmup', type=int, default=5, help='Warmup epochs for DC loss.')
 loss_group.add_argument('--dc-ramp', type=int, default=10, help='Ramp-up epochs for DC loss.')
@@ -106,27 +106,29 @@ model_group.add_argument('--slerp-weight', type=float, default=0.5, help='Weight
 model_group.add_argument('--temperature', type=float, default=0.07, help='Temperature for the classification layer.')
 model_group.add_argument('--crop-body', action='store_true', help='Crop body from the input images.')
 
-# --- Staged Training ---
-staged_group = parser.add_argument_group('Staged Training', 'Parameters for staged training')
-staged_group.add_argument('--staged-training', action='store_true', help='Enable staged training.')
-staged_group.add_argument('--epochs-stage1', type=int, default=10, help='Number of epochs for stage 1 (Prompt Learner).')
-staged_group.add_argument('--epochs-stage2', type=int, default=20, help='Number of epochs for stage 2 (Adapter & Temporal).')
-staged_group.add_argument('--epochs-stage3', type=int, default=20, help='Number of epochs for stage 3 (End-to-End).')
-staged_group.add_argument('--lr-stage1', type=float, default=0.001, help='Learning rate for prompt learner in stage 1.')
-staged_group.add_argument('--lr-stage2', type=float, default=1e-4, help='Learning rate for adapter/temporal in stage 2.')
-staged_group.add_argument('--lr-stage3', type=float, default=1e-5, help='Learning rate for end-to-end fine-tuning in stage 3.')
-
-
 # ==================== Helper Functions ====================
 def setup_environment(args: argparse.Namespace) -> argparse.Namespace:
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    if args.gpu == 'mps':
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            print("MPS device not found, falling back to CPU.")
+            device = torch.device("cpu")
+    elif torch.cuda.is_available():
+        device = torch.device(f"cuda:{args.gpu}")
+    else:
+        print("CUDA not available, falling back to CPU.")
+        device = torch.device("cpu")
+    
     args.device = device
+    print(f"Using device: {device}")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if device.type == 'cuda':
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
     cudnn.benchmark = True
     
     print("Environment and random seeds set successfully.")
@@ -158,31 +160,6 @@ def setup_paths_and_logging(args: argparse.Namespace) -> argparse.Namespace:
         
     return args
 
-def set_trainable_params(model, stage):
-    for name, param in model.named_parameters():
-        param.requires_grad = False
-    
-    if stage == 1:
-        print("Setting trainable parameters for STAGE 1: Prompt Learner")
-        trainable_keywords = ["prompt_learner"]
-    elif stage == 2:
-        print("Setting trainable parameters for STAGE 2: Adapter & Temporal")
-        trainable_keywords = ["face_adapter", "temporal_net", "temporal_net_body", "project_fc"]
-    elif stage == 3:
-        print("Setting trainable parameters for STAGE 3: End-to-End Fine-tuning")
-        trainable_keywords = ["image_encoder", "temporal_net", "prompt_learner", "temporal_net_body", "project_fc", "face_adapter"]
-    else: # Default (non-staged) training
-        print("Setting trainable parameters for default training")
-        trainable_keywords = ["image_encoder", "temporal_net", "prompt_learner", "temporal_net_body", "project_fc", "face_adapter"]
-
-    print('\nTrainable parameters:')
-    for name, param in model.named_parameters():
-        if any(keyword in name for keyword in trainable_keywords):
-            param.requires_grad = True
-            print(f"- {name}")
-    print('************************\n')
-
-
 # ==================== Training Function ====================
 def run_training(args: argparse.Namespace) -> None:
     # Paths for logging and saving
@@ -196,7 +173,6 @@ def run_training(args: argparse.Namespace) -> None:
     best_val_uar = 0.0
     best_val_war = 0.0
     start_epoch = 0
-    
     
     # Build model
     print("=> Building model...")
@@ -232,78 +208,74 @@ def run_training(args: argparse.Namespace) -> None:
         class_priors = torch.tensor(class_counts, dtype=torch.float) / sum(class_counts)
         class_priors = class_priors.to(args.device)
 
-    # --- Staged Training Loop ---
-    if args.staged_training:
-        total_epochs = args.epochs_stage1 + args.epochs_stage2 + args.epochs_stage3
-        recorder = RecorderMeter(total_epochs)
+    recorder = RecorderMeter(args.epochs)
+    optimizer = torch.optim.SGD([
+        {"params": model.temporal_net.parameters(), "lr": args.lr},
+        {"params": model.temporal_net_body.parameters(), "lr": args.lr},
+        {"params": model.image_encoder.parameters(), "lr": args.lr_image_encoder},
+        {"params": model.prompt_learner.parameters(), "lr": args.lr_prompt_learner},
+        {"params": model.project_fc.parameters(), "lr": args.lr},
+        {"params": model.face_adapter.parameters(), "lr": args.lr_adapter}
+    ], momentum=args.momentum, weight_decay=args.weight_decay)
+
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
+    trainer = Trainer(model, criterion, optimizer, scheduler, args.device, log_txt_path, 
+                    mi_criterion=mi_criterion, lambda_mi=args.lambda_mi,
+                    dc_criterion=dc_criterion, lambda_dc=args.lambda_dc,
+                    class_priors=class_priors, logit_adj_tau=args.logit_adj_tau,
+                    mi_warmup=args.mi_warmup, mi_ramp=args.mi_ramp,
+                    dc_warmup=args.dc_warmup, dc_ramp=args.dc_ramp, use_amp=args.use_amp, grad_clip=args.grad_clip)
+    
+    for epoch in range(start_epoch, args.epochs):
+        inf = f'******************** Epoch: {epoch} ********************'
+        start_time = time.time()
+        print(inf)
+        with open(log_txt_path, 'a') as f:
+            f.write(inf + '\n')
+
+        # Log current learning rates
+        current_lrs = [param_group['lr'] for param_group in trainer.optimizer.param_groups]
+        lr_str = ' '.join([f'{lr:.1e}' for lr in current_lrs])
+        log_msg = f'Current learning rates: {lr_str}'
+        with open(log_txt_path, 'a') as f:
+            f.write(log_msg + '\n')
+        print(log_msg)
+
+        # Train & Validate
+        train_war, train_uar, train_los, _ = trainer.train_epoch(train_loader, epoch)
+        val_war, val_uar, val_los, val_cm = trainer.validate(val_loader, str(epoch))
+        trainer.scheduler.step()
+
+        # Save checkpoint
+        is_best = val_uar > best_val_uar
+        best_val_uar = max(val_uar, best_val_uar)
+        best_val_war = max(val_war, best_val_war)
+        best_train_uar = max(train_uar, best_train_uar)
+        best_train_war = max(train_war, best_train_war)
+
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'state_dict': trainer.model.state_dict(),
+            'best_acc': best_val_uar, 
+            'optimizer': trainer.optimizer.state_dict(),
+            'recorder': recorder
+        }, is_best, checkpoint_path, best_checkpoint_path)
+
+        # Record metrics
+        epoch_time = time.time() - start_time
+        recorder.update(epoch, train_los, train_war, train_uar, val_los, val_war, val_uar)
+        recorder.plot_curve(log_curve_path)
         
-        # STAGE 1: Train Prompt Learner
-        print("\n\n" + "="*40)
-        print(" " * 15 + "STAGE 1")
-        print("="*40 + "\n")
-        set_trainable_params(model, 1)
-        optimizer = torch.optim.SGD([{'params': model.prompt_learner.parameters(), 'lr': args.lr_stage1}],
-                                    momentum=args.momentum, weight_decay=args.weight_decay)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
-        trainer = Trainer(model, criterion, optimizer, scheduler, args.device, log_txt_path, 
-                        mi_criterion=mi_criterion, lambda_mi=args.lambda_mi, dc_criterion=dc_criterion, lambda_dc=args.lambda_dc,
-                        class_priors=class_priors, logit_adj_tau=args.logit_adj_tau,
-                        mi_warmup=args.mi_warmup, mi_ramp=args.mi_ramp, dc_warmup=args.dc_warmup, dc_ramp=args.dc_ramp, use_amp=args.use_amp, grad_clip=args.grad_clip)
-        
-        for epoch in range(args.epochs_stage1):
-            run_one_training_epoch(trainer, train_loader, val_loader, checkpoint_path, best_checkpoint_path, epoch, recorder, best_val_uar, best_val_war, best_train_uar, best_train_war, log_txt_path, log_curve_path)
-
-        # STAGE 2: Train Adapter and Temporal Models
-        print("\n\n" + "="*40)
-        print(" " * 15 + "STAGE 2")
-        print("="*40 + "\n")
-        set_trainable_params(model, 2)
-        optimizer = torch.optim.SGD([
-            {"params": model.face_adapter.parameters(), "lr": args.lr_stage2},
-            {"params": model.temporal_net.parameters(), "lr": args.lr_stage2},
-            {"params": model.temporal_net_body.parameters(), "lr": args.lr_stage2},
-            {"params": model.project_fc.parameters(), "lr": args.lr_stage2},
-        ], momentum=args.momentum, weight_decay=args.weight_decay)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
-        trainer.optimizer = optimizer
-        trainer.scheduler = scheduler
-        for epoch in range(args.epochs_stage1, args.epochs_stage1 + args.epochs_stage2):
-             run_one_training_epoch(trainer, train_loader, val_loader, checkpoint_path, best_checkpoint_path, epoch, recorder, best_val_uar, best_val_war, best_train_uar, best_train_war, log_txt_path, log_curve_path)
-
-        # STAGE 3: End-to-End Fine-tuning
-        print("\n\n" + "="*40)
-        print(" " * 15 + "STAGE 3")
-        print("="*40 + "\n")
-        set_trainable_params(model, 3)
-        optimizer = torch.optim.SGD([
-            {"params": model.parameters(), "lr": args.lr_stage3}
-        ], momentum=args.momentum, weight_decay=args.weight_decay)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
-        trainer.optimizer = optimizer
-        trainer.scheduler = scheduler
-        for epoch in range(args.epochs_stage1 + args.epochs_stage2, total_epochs):
-             run_one_training_epoch(trainer, train_loader, val_loader, checkpoint_path, best_checkpoint_path, epoch, recorder, best_val_uar, best_val_war, best_train_uar, best_train_war, log_txt_path, log_curve_path)
-
-    else: # Default training
-        recorder = RecorderMeter(args.epochs)
-        optimizer = torch.optim.SGD([
-            {"params": model.temporal_net.parameters(), "lr": args.lr},
-            {"params": model.temporal_net_body.parameters(), "lr": args.lr},
-            {"params": model.image_encoder.parameters(), "lr": args.lr_image_encoder},
-            {"params": model.prompt_learner.parameters(), "lr": args.lr_prompt_learner},
-            {"params": model.project_fc.parameters(), "lr": args.lr_image_encoder},
-            {"params": model.face_adapter.parameters(), "lr": args.lr_adapter}
-        ], momentum=args.momentum, weight_decay=args.weight_decay)
-
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
-        trainer = Trainer(model, criterion, optimizer, scheduler, args.device, log_txt_path, 
-                        mi_criterion=mi_criterion, lambda_mi=args.lambda_mi,
-                        dc_criterion=dc_criterion, lambda_dc=args.lambda_dc,
-                        class_priors=class_priors, logit_adj_tau=args.logit_adj_tau,
-                        mi_warmup=args.mi_warmup, mi_ramp=args.mi_ramp,
-                        dc_warmup=args.dc_warmup, dc_ramp=args.dc_ramp, use_amp=args.use_amp, grad_clip=args.grad_clip)
-        for epoch in range(start_epoch, args.epochs):
-             run_one_training_epoch(trainer, train_loader, val_loader, checkpoint_path, best_checkpoint_path, epoch, recorder, best_val_uar, best_val_war, best_train_uar, best_train_war, log_txt_path, log_curve_path)
+        log_msg = (
+                   f'Train WAR: {train_war:.2f}% | Train UAR: {train_uar:.2f}%\n'
+                   f'Valid WAR: {val_war:.2f}% | Valid UAR: {val_uar:.2f}%\n'
+                   f'Best Valid WAR: {best_val_war:.2f}% | Best Valid UAR: {best_val_uar:.2f}%\n'
+                   f'Best Train WAR: {best_train_war:.2f}% | Best Train UAR: {best_train_uar:.2f}%\n'
+                   f'An epoch time: {epoch_time:.2f}s\n'
+                   f'Validation Confusion Matrix:\n{val_cm}')
+    print(log_msg)
+    with open(log_txt_path, 'a') as f:
+        f.write(log_msg + '\n\n')
 
     # Final evaluation with best model
     print("=> Final evaluation on test set...")
@@ -318,57 +290,6 @@ def run_training(args: argparse.Namespace) -> None:
         log_txt_path=log_txt_path,
         title=f"Confusion Matrix on {args.dataset} Test Set"
     )
-
-def run_one_training_epoch(trainer, train_loader, val_loader, checkpoint_path, best_checkpoint_path, epoch, recorder, best_val_uar, best_val_war, best_train_uar, best_train_war, log_txt_path, log_curve_path):
-    inf = f'******************** Epoch: {epoch} ********************'
-    start_time = time.time()
-    print(inf)
-    with open(log_txt_path, 'a') as f:
-        f.write(inf + '\n')
-
-    # Log current learning rates
-    current_lrs = [param_group['lr'] for param_group in trainer.optimizer.param_groups]
-    lr_str = ' '.join([f'{lr:.1e}' for lr in current_lrs])
-    log_msg = f'Current learning rates: {lr_str}'
-    with open(log_txt_path, 'a') as f:
-        f.write(log_msg + '\n')
-    print(log_msg)
-
-    # Train & Validate
-    train_war, train_uar, train_los, _ = trainer.train_epoch(train_loader, epoch)
-    val_war, val_uar, val_los, val_cm = trainer.validate(val_loader, str(epoch))
-    trainer.scheduler.step()
-
-    # Save checkpoint
-    is_best = val_uar > best_val_uar
-    best_val_uar = max(val_uar, best_val_uar)
-    best_val_war = max(val_war, best_val_war)
-    best_train_uar = max(train_uar, best_train_uar)
-    best_train_war = max(train_war, best_train_war)
-
-    save_checkpoint({
-        'epoch': epoch + 1,
-        'state_dict': trainer.model.state_dict(),
-        'best_acc': best_val_uar, 
-        'optimizer': trainer.optimizer.state_dict(),
-        'recorder': recorder
-    }, is_best, checkpoint_path, best_checkpoint_path)
-
-    # Record metrics
-    epoch_time = time.time() - start_time
-    recorder.update(epoch, train_los, train_war, train_uar, val_los, val_war, val_uar)
-    recorder.plot_curve(log_curve_path)
-    
-    log_msg = (
-               f'Train WAR: {train_war:.2f}% | Train UAR: {train_uar:.2f}%\n'
-               f'Valid WAR: {val_war:.2f}% | Valid UAR: {val_uar:.2f}%\n'
-               f'Best Valid WAR: {best_val_war:.2f}% | Best Valid UAR: {best_val_uar:.2f}%\n'
-               f'Best Train WAR: {best_train_war:.2f}% | Best Train UAR: {best_train_uar:.2f}%\n'
-               f'An epoch time: {epoch_time:.2f}s\n'
-               f'Validation Confusion Matrix:\n{val_cm}')
-    print(log_msg)
-    with open(log_txt_path, 'a') as f:
-        f.write(log_msg + '\n\n')
 
 def run_eval(args: argparse.Namespace) -> None:
     print("=> Starting evaluation mode...")
