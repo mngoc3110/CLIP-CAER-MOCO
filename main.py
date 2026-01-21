@@ -91,6 +91,8 @@ loss_group.add_argument('--logit-adj', action='store_true', help='Use logit adju
 loss_group.add_argument('--logit-adj-tau', type=float, default=0.5, help='Temperature for logit adjustment.')
 loss_group.add_argument('--use-weighted-sampler', action='store_true', help='Use WeightedRandomSampler.')
 loss_group.add_argument('--label-smoothing', type=float, default=0.05, help='Label smoothing factor.')
+loss_group.add_argument('--use-ldl', action='store_true', help='Use Semantic Label Distribution Learning (LDL) Loss.')
+loss_group.add_argument('--ldl-temperature', type=float, default=1.0, help='Temperature for LDL target distribution.')
 
 # --- Model & Input ---
 model_group = parser.add_argument_group('Model & Input', 'Parameters for model architecture and data handling')
@@ -106,6 +108,10 @@ model_group.add_argument('--image-size', type=int, default=224, help='Size to re
 model_group.add_argument('--slerp-weight', type=float, default=0.5, help='Weight for spherical linear interpolation (IEC).')
 model_group.add_argument('--temperature', type=float, default=0.07, help='Temperature for the classification layer.')
 model_group.add_argument('--crop-body', action='store_true', help='Crop body from the input images.')
+model_group.add_argument('--use-moco', action='store_true', help='Use MoCoRank for training.')
+model_group.add_argument('--moco-k', type=int, default=65536, help='Queue size for MoCo.')
+model_group.add_argument('--moco-m', type=float, default=0.999, help='Momentum for MoCo.')
+model_group.add_argument('--moco-t', type=float, default=0.07, help='Temperature for MoCo.')
 
 # ==================== Helper Functions ====================
 def setup_environment(args: argparse.Namespace) -> argparse.Namespace:
@@ -190,7 +196,10 @@ def run_training(args: argparse.Namespace) -> None:
     # Loss and optimizer
     class_counts = get_class_counts(args.train_annotation)
     
-    if args.label_smoothing > 0:
+    if args.use_ldl:
+        print(f"=> Using SemanticLDLLoss (LDL) with temperature {args.ldl_temperature}")
+        criterion = SemanticLDLLoss(temperature=args.ldl_temperature).to(args.device)
+    elif args.label_smoothing > 0:
         criterion = LSR2(e=args.label_smoothing, label_mode='class_descriptor').to(args.device)
     elif args.class_balanced_loss:
         print("=> Using FocalLoss as the class-balanced loss.")

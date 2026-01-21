@@ -2,9 +2,9 @@
 
 python main.py \
   --mode train \
-  --exper-name final_LSR2_AdamW_Ensemble_baselineProtocol_SAFE \
+  --exper-name final_AttnPool_LDL_MoCo_UAR70 \
   --gpu 0 \
-  --epochs 50 \
+  --epochs 60 \
   --batch-size 8 \
   --optimizer AdamW \
   --lr 1e-4 \
@@ -12,7 +12,7 @@ python main.py \
   --lr-prompt-learner 5e-4 \
   --lr-adapter 1e-4 \
   --weight-decay 0.0001 \
-  --milestones 20 35 \
+  --milestones 25 45 \
   --gamma 0.1 \
   --temporal-layers 1 \
   --num-segments 16 \
@@ -32,15 +32,19 @@ python main.py \
   --class-token-position end \
   --class-specific-contexts True \
   --load_and_tune_prompt_learner True \
-  --lambda_dc 0.08 \
+  --lambda_dc 0.1 \
   --dc-warmup 5 \
   --dc-ramp 10 \
-  --lambda_mi 0.05 \
+  --lambda_mi 0.1 \
   --mi-warmup 10 \
   --mi-ramp 15 \
   --slerp-weight 0.0 \
-  --temperature 0.5 \
-  --label-smoothing 0.02 \
+  --temperature 0.07 \
+  --use-ldl \
+  --ldl-temperature 1.0 \
+  --use-moco \
+  --moco-k 4096 \
+  --moco-m 0.99 \
   --use-amp \
   --use-weighted-sampler \
   --crop-body \

@@ -120,3 +120,67 @@ class BlvLoss(nn.Module):
         loss = F.cross_entropy(pred, target, reduction='none')
 
         return loss.mean()
+
+class MoCoRankLoss(nn.Module):
+    def __init__(self, temperature=0.07):
+        super(MoCoRankLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, video_features, text_features, target, queue):
+        """
+        video_features: (B, D)
+        text_features: (C, D)
+        target: (B)
+        queue: (D, K)
+        """
+        batch_size = video_features.shape[0]
+        
+        # 1. Positive Logits: Video vs Correct Text Prototype (B, 1)
+        # Select the text prototype for each sample in the batch
+        pos_text_prototypes = text_features[target] # (B, D)
+        l_pos = torch.einsum('bd,bd->b', [video_features, pos_text_prototypes]).unsqueeze(-1) # (B, 1)
+        
+        # 2. Negative Logits: Video vs Queue (B, K)
+        l_neg = torch.matmul(video_features, queue) # (B, K)
+        
+        # 3. Combine logits
+        logits = torch.cat([l_pos, l_neg], dim=1) # (B, 1+K)
+        logits /= self.temperature
+        
+        # 4. Labels: The positive is always at index 0
+        labels = torch.zeros(batch_size, dtype=torch.long, device=video_features.device)
+        
+        loss = F.cross_entropy(logits, labels)
+        return loss
+
+class SemanticLDLLoss(nn.Module):
+    def __init__(self, temperature=1.0):
+        super(SemanticLDLLoss, self).__init__()
+        self.temperature = temperature
+        self.kl_div = nn.KLDivLoss(reduction='batchmean')
+
+    def forward(self, logits, target, text_features):
+        """
+        logits: (B, C) - Video-Text similarities
+        target: (B) - Ground truth indices
+        text_features: (C, D) - Embeddings of class prompts
+        """
+        # 1. Compute Semantic Similarity between classes based on Text Features
+        # text_features is (C, D), normalized
+        # sim_matrix: (C, C)
+        sim_matrix = torch.matmul(text_features, text_features.T)
+        
+        # 2. Create Soft Target Distributions
+        # For each sample, the target distribution is the row in sim_matrix corresponding to the GT label
+        # (B, C)
+        soft_targets = sim_matrix[target]
+        
+        # Normalize soft targets to be a valid probability distribution
+        soft_targets = F.softmax(soft_targets / self.temperature, dim=1)
+        
+        # 3. Compute Prediction Log-Probabilities
+        log_probs = F.log_softmax(logits / self.temperature, dim=1)
+        
+        # 4. KL Divergence Loss
+        loss = self.kl_div(log_probs, soft_targets)
+        return loss

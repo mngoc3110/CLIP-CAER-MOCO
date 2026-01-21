@@ -174,6 +174,45 @@ class Temporal_Transformer_Cls(nn.Module):
         x = x[:, 0]
         # print(self.cls_token)
         return x
+
+class Temporal_Transformer_AttnPool(nn.Module):
+    def __init__(self, num_patches, input_dim, depth, heads, mlp_dim, dim_head):
+        super().__init__()
+        dropout = 0.1
+        self.num_patches = num_patches
+        self.input_dim = input_dim
+        
+        # We don't use [CLS] token here, instead we use all frame tokens
+        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches, input_dim))
+        self.temporal_transformer = Transformer(input_dim, depth, heads, dim_head, mlp_dim, dropout)
+        
+        # Attention Pooling layers
+        self.attention_pool = nn.Sequential(
+            nn.Linear(input_dim, mlp_dim // 2),
+            nn.Tanh(),
+            nn.Linear(mlp_dim // 2, 1)
+        )
+
+    def forward(self, x):
+        # x shape: (batch_size, num_segments, input_dim) -> (B, 16, 512)
+        b, n, d = x.shape
+        
+        # Add positional embedding to all frame tokens
+        x = x + self.pos_embedding[:, :n]
+        
+        # Process through Transformer layers
+        x = self.temporal_transformer(x) # (B, 16, 512)
+        
+        # Compute attention scores for each frame
+        # (B, 16, 512) -> (B, 16, 1)
+        attn_weights = self.attention_pool(x)
+        attn_weights = torch.softmax(attn_weights, dim=1) # Normalize over 16 frames
+        
+        # Weighted sum: (B, 1, 16) @ (B, 16, 512) -> (B, 1, 512)
+        pooled_x = torch.bmm(attn_weights.transpose(1, 2), x)
+        pooled_x = pooled_x.squeeze(1) # (B, 512)
+        
+        return pooled_x
     
 #### 混合人脸特征和上下文特征的关系
 class Temporal_Transformer_Mix(nn.Module):

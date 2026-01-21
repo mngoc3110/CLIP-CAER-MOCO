@@ -8,6 +8,7 @@ import os
 import torchvision
 
 from utils.utils import AverageMeter, ProgressMeter, get_loss_weight
+from utils.loss import SemanticLDLLoss
 
 class Trainer:
     """A class that encapsulates the training and validation logic."""
@@ -125,7 +126,10 @@ class Trainer:
                         output = output + self.logit_adj_tau * torch.log(self.class_priors + 1e-12)
 
                     # Calculate loss
-                    classification_loss = self.criterion(output, target)
+                    if isinstance(self.criterion, SemanticLDLLoss):
+                        classification_loss = self.criterion(output, target, processed_learnable_text_features)
+                    else:
+                        classification_loss = self.criterion(output, target)
                     loss = classification_loss
 
                     if is_train and self.mi_criterion is not None:

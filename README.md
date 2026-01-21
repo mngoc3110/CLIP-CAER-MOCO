@@ -10,7 +10,7 @@ This repository enhances the original CLIP-CAER by integrating several state-of-
 
 ## New Architecture Details
 
-The enhanced architecture builds upon the CLIP-CAER backbone, incorporating several new modules to create a more robust and accurate model.
+The enhanced architecture builds upon the CLIP-CAER backbone, incorporating several new modules to create a more robust and accurate model, specifically targeting high performance on imbalanced datasets (UAR > 70%).
 
 ### 1. Dual-Stream Visual Backbone
 The model processes two separate visual streams:
@@ -19,32 +19,31 @@ The model processes two separate visual streams:
 
 Both streams are processed by a shared CLIP Visual Encoder.
 
-### 2. EAA (Expression-Aware Adapter)
+### 2. Attention Pooling for Temporal Modeling
+Instead of using a standard `[CLS]` token which can be diluted by neutral frames, we implement a **Temporal Transformer with Attention Pooling**.
+- **Mechanism:** The model calculates an attention score for each frame in the sequence, effectively "highlighting" the most emotional frames (peak expression) and suppressing neutral or noisy frames.
+- **Benefit:** This is crucial for imbalanced datasets where the key emotional signal might only be present in a few frames.
+
+### 3. EAA (Expression-Aware Adapter)
 To better capture subtle, emotion-specific facial details without sacrificing the generalization power of the pre-trained CLIP model, a lightweight **Expression-Aware Adapter** is integrated into the face stream.
 - **Implementation:** A bottleneck adapter module is inserted after the CLIP visual encoder for the face stream.
 - **Trainable:** Only the adapter's parameters are fine-tuned, keeping the main visual encoder frozen.
 
-### 3. Temporal Modeling and Fusion
-- **Temporal Encoders:** The sequence of frame features from both the face and context streams are passed through separate Temporal Transformer models to capture temporal dynamics.
-- **Fusion:** The resulting video-level embeddings for the face (`z_f`) and context (`z_c`) are then fused by concatenation and a linear projection to produce a final, unified visual embedding `z`.
+### 4. Dual-View Prompting & MoCoRank
+- **Prompt Ensembling:** We use a learnable prompt ensemble strategy to generate robust text embeddings.
+- **MoCoRank:** We integrate Momentum Contrast (MoCo) with a memory queue to maintain a large set of negative samples. This helps the model learn more discriminative features by contrasting the current video against a history of previous samples, which is particularly effective for learning from long-tailed distributions.
 
-### 4. Dual-View Prompting & MI Loss
-To prevent the learnable prompts from overfitting and deviating from their intended semantics, a dual-view prompting strategy is used.
-- **Hand-Crafted "Descriptive" View:** A rich, descriptive prompt for each class, detailing both behavioral cues and facial action unit (AU)-like micro-expressions (e.g., "A person with furrowed eyebrows and a puzzled gaze"). These are static.
-- **Learnable "Soft" View:** CoOp-style learnable context vectors that are optimized during training.
-- **Mutual Information (MI) Loss:** An InfoNCE-based loss is used to maximize the mutual information between the embeddings of the descriptive and soft prompts (`t_desc` and `t_soft`), ensuring the learnable prompts remain semantically grounded.
+### 5. Composite Loss Function with Semantic LDL
+The model is trained with a composite loss function designed to handle ambiguity and class imbalance:
+`L_total = L_LDL + λ_mi * L_mi + λ_dc * L_dc + L_MoCo`
 
-### 5. IEC (Instance-Enhanced Classifier)
-To make the text-based classifier more adaptive to the visual features of each specific video instance, the IEC module is used.
-- **Implementation:** Instead of a static text prototype for each class, a dynamic, instance-enhanced prototype is created using **Spherical Linear Interpolation (Slerp)**.
-- **Formula:** `t_mix(k) = slerp(t_desc(k), z, λ_slerp)`, where `t_desc(k)` is the descriptive prompt for class `k`, `z` is the visual embedding for the video instance, and `λ_slerp` is a tunable weight.
-- The final classification is performed by calculating the similarity between the visual embedding `z` and these mixed text prototypes `t_mix`.
+- **`L_LDL` (Semantic Label Distribution Learning Loss)**: Instead of one-hot labels, we use soft labels generated based on the semantic similarity between class prompts. This teaches the model the "soft" relationships between emotions (e.g., Anger is more similar to Disgust than to Happy).
+- **`L_mi` (Mutual Information Loss)**: Maximizes the mutual information between learnable prompts and fixed descriptive prompts to prevent semantic drift.
+- **`L_dc` (Decorrelation Loss)**: Reduces the redundancy between feature dimensions.
+- **`L_MoCo`**: The contrastive loss from the MoCoRank module.
 
-### 6. Composite Loss Function
-The model is trained with a composite loss:
-`L_total = L_classification + λ_mi * L_mi`
-- **`L_classification`**: A standard cross-entropy loss for the main classification task. A class-balanced weighting can be optionally applied to handle imbalanced datasets.
-- **`L_mi`**: The Mutual Information loss to regularize the prompt learning.
+### 6. IEC (Instance-Enhanced Classifier)
+*(Optional)* To make the text-based classifier more adaptive to the visual features of each specific video instance, the IEC module can be enabled to blend instance features with text prototypes using Spherical Linear Interpolation (Slerp).
 
 ## Weights Download
 We provide the model weights trained by the method in this paper, which can be downloaded [here](https://drive.google.com/file/d/1mNYBKJ-vlsGf1QTN0tySs0-7sp-f7flb/view?usp=sharing).
