@@ -4,14 +4,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 python main.py \
   --mode train \
-  --exper-name final_AttnPool_LDL_MoCo_2048_WD5e4_LR1e5 \
+  --exper-name Stabilize_PromptLR2e4_Ctx8_MIWarm5 \
   --gpu 0 \
   --epochs 60 \
   --batch-size 8 \
   --optimizer AdamW \
   --lr 1e-5 \
   --lr-image-encoder 1e-6 \
-  --lr-prompt-learner 5e-4 \
+  --lr-prompt-learner 2e-4 \
   --lr-adapter 1e-4 \
   --weight-decay 0.0005 \
   --milestones 25 45 \
@@ -30,7 +30,7 @@ python main.py \
   --bounding-box-face /kaggle/input/raer-video-emotion-dataset/RAER/bounding_box/face.json \
   --bounding-box-body /kaggle/input/raer-video-emotion-dataset/RAER/bounding_box/body.json \
   --text-type prompt_ensemble \
-  --contexts-number 12 \
+  --contexts-number 8 \
   --class-token-position end \
   --class-specific-contexts True \
   --load_and_tune_prompt_learner True \
@@ -38,8 +38,8 @@ python main.py \
   --dc-warmup 5 \
   --dc-ramp 10 \
   --lambda_mi 0.1 \
-  --mi-warmup 10 \
-  --mi-ramp 15 \
+  --mi-warmup 5 \
+  --mi-ramp 10 \
   --slerp-weight 0.0 \
   --temperature 0.07 \
   --use-ldl \
