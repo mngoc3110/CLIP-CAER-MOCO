@@ -16,12 +16,13 @@ python main.py \
   --weight-decay 0.0005 \
   --milestones 25 45 \
   --gamma 0.1 \
-  --temporal-layers 1 \
+  --temporal-layers 3 \
   --num-segments 16 \
   --duration 1 \
   --image-size 224 \
   --seed 42 \
   --print-freq 10 \
+  --gradient-accumulation-steps 4 \
   --root-dir /kaggle/input/raer-video-emotion-dataset \
   --train-annotation /kaggle/input/raer-annot/annotation/train_80.txt \
   --val-annotation /kaggle/input/raer-annot/annotation/val_20.txt \
@@ -47,6 +48,9 @@ python main.py \
   --use-moco \
   --moco-k 4096 \
   --moco-m 0.99 \
+  --lambda-rank 0.05 \
+  --rank-warmup 10 \
+  --rank-ramp 20 \
   --use-amp \
   --use-weighted-sampler \
   --crop-body \

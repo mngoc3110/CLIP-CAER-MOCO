@@ -224,6 +224,10 @@ class GenerateModel(nn.Module):
             # Average the logits across the prompts for each class
             output = torch.mean(logits, dim=2) / self.args.temperature
 
+            # Average text features across prompts: (C, P, D) -> (C, D)
+            # This ensures it matches hand_crafted_text_features shape for MI Loss
+            text_features = text_features.mean(dim=1)
+
         elif self.args.slerp_weight > 0:
             video_features_expanded = video_features.unsqueeze(1).expand(-1, hand_crafted_text_features.shape[0], -1)
             text_features_expanded = hand_crafted_text_features.unsqueeze(0).expand(video_features.shape[0], -1, -1)
@@ -236,4 +240,4 @@ class GenerateModel(nn.Module):
         else:
             output = video_features @ text_features.t() / self.args.temperature
 
-        return output, text_features, hand_crafted_text_features
+        return output, text_features, hand_crafted_text_features, video_features

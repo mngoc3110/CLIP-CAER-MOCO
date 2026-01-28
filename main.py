@@ -63,14 +63,14 @@ train_group = parser.add_argument_group('Training Control', 'Parameters to contr
 train_group.add_argument('--epochs', type=int, default=50, help='Total number of training epochs.')
 train_group.add_argument('--batch-size', type=int, default=8, help='Batch size for training and validation.')
 train_group.add_argument('--print-freq', type=int, default=10, help='Frequency of printing training logs.')
-train_group.add_argument('--use-amp', action='store_true', help='Use Automatic Mixed Precision.')
-train_group.add_argument('--grad-clip', type=float, default=1.0, help='Gradient clipping value.')
-
+    train_group.add_argument('--use-amp', action='store_true', help='Use Automatic Mixed Precision.')
+    train_group.add_argument('--grad-clip', type=float, default=1.0, help='Gradient clipping value.')
+    train_group.add_argument('--gradient-accumulation-steps', type=int, default=1, help='Number of steps to accumulate gradients before updating.')
 # --- Optimizer & Learning Rate ---
 optim_group = parser.add_argument_group('Optimizer & LR', 'Hyperparameters for the optimizer and scheduler')
 optim_group.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'AdamW'], help='The optimizer to use (SGD or AdamW).')
 optim_group.add_argument('--lr', type=float, default=1e-5, help='Initial learning rate for main modules (temporal, project_fc).')
-optim_group.add_argument('--lr-image-encoder', type=float, default=0.0, help='Learning rate for the image encoder part (set to 0 to freeze).')
+optim_group.add_argument('--lr-image-encoder', type=float, default=1e-5, help='Learning rate for the image encoder part (set to 0 to freeze).')
 optim_group.add_argument('--lr-prompt-learner', type=float, default=1e-5, help='Learning rate for the prompt learner.')
 optim_group.add_argument('--lr-adapter', type=float, default=1e-5, help='Learning rate for the adapter.')
 optim_group.add_argument('--weight-decay', type=float, default=0.0001, help='Weight decay for the optimizer.')
@@ -109,11 +109,13 @@ model_group.add_argument('--image-size', type=int, default=224, help='Size to re
 model_group.add_argument('--slerp-weight', type=float, default=0.5, help='Weight for spherical linear interpolation (IEC).')
 model_group.add_argument('--temperature', type=float, default=0.07, help='Temperature for the classification layer.')
 model_group.add_argument('--crop-body', action='store_true', help='Crop body from the input images.')
-model_group.add_argument('--use-moco', action='store_true', help='Use MoCoRank for training.')
-model_group.add_argument('--moco-k', type=int, default=65536, help='Queue size for MoCo.')
-model_group.add_argument('--moco-m', type=float, default=0.999, help='Momentum for MoCo.')
-model_group.add_argument('--moco-t', type=float, default=0.07, help='Temperature for MoCo.')
-
+    model_group.add_argument('--use-moco', action='store_true', help='Use MoCoRank for training.')
+    model_group.add_argument('--moco-k', type=int, default=65536, help='Queue size for MoCo.')
+    model_group.add_argument('--moco-m', type=float, default=0.999, help='Momentum for MoCo.')
+    model_group.add_argument('--moco-t', type=float, default=0.07, help='Temperature for MoCo.')
+    model_group.add_argument('--lambda-rank', type=float, default=0.0, help='Weight for MoCoRank loss.')
+    model_group.add_argument('--rank-warmup', type=int, default=0, help='Warmup epochs for MoCoRank loss.')
+    model_group.add_argument('--rank-ramp', type=int, default=0, help='Ramp-up epochs for MoCoRank loss.')
 # ==================== Helper Functions ====================
 def setup_environment(args: argparse.Namespace) -> argparse.Namespace:
     if args.gpu == 'mps':
@@ -212,6 +214,12 @@ def run_training(args: argparse.Namespace) -> None:
     mi_criterion = MILoss().to(args.device) if args.lambda_mi > 0 else None
     dc_criterion = DCLoss().to(args.device) if args.lambda_dc > 0 else None
 
+    # MoCoRank criterion
+    moco_criterion = None
+    if args.use_moco and args.lambda_rank > 0:
+        moco_criterion = MoCoRankLoss(temperature=args.moco_t).to(args.device)
+        print(f"=> Using MoCoRankLoss with lambda_rank={args.lambda_rank}, warmup={args.rank_warmup}, ramp={args.rank_ramp}")
+
     class_priors = None
     if args.logit_adj:
         print("=> Using logit adjustment.")
@@ -237,12 +245,16 @@ def run_training(args: argparse.Namespace) -> None:
         raise ValueError(f"Optimizer {args.optimizer} not supported.")
 
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
-    trainer = Trainer(model, criterion, optimizer, scheduler, args.device, log_txt_path, 
+    trainer = Trainer(model, criterion, optimizer, scheduler, args.device, log_txt_path,
                     mi_criterion=mi_criterion, lambda_mi=args.lambda_mi,
                     dc_criterion=dc_criterion, lambda_dc=args.lambda_dc,
+                    moco_criterion=moco_criterion, lambda_rank=args.lambda_rank,
                     class_priors=class_priors, logit_adj_tau=args.logit_adj_tau,
                     mi_warmup=args.mi_warmup, mi_ramp=args.mi_ramp,
-                    dc_warmup=args.dc_warmup, dc_ramp=args.dc_ramp, use_amp=args.use_amp, grad_clip=args.grad_clip)
+                    dc_warmup=args.dc_warmup, dc_ramp=args.dc_ramp,
+                    rank_warmup=args.rank_warmup, rank_ramp=args.rank_ramp,
+                    use_amp=args.use_amp, grad_clip=args.grad_clip, mixup_alpha=args.mixup_alpha,
+                    gradient_accumulation_steps=args.gradient_accumulation_steps)
     
     for epoch in range(start_epoch, args.epochs):
         inf = f'******************** Epoch: {epoch} ********************'
@@ -301,7 +313,7 @@ def run_training(args: argparse.Namespace) -> None:
 
     # Final evaluation with best model
     print("=> Final evaluation on test set...")
-    pre_trained_dict = torch.load(best_checkpoint_path,map_location=f"cuda:{args.gpu}")['state_dict']
+    pre_trained_dict = torch.load(best_checkpoint_path, map_location=f"cuda:{args.gpu}", weights_only=False)['state_dict']
     model.load_state_dict(pre_trained_dict)
     computer_uar_war(
         val_loader=test_loader,
@@ -323,7 +335,7 @@ def run_eval(args: argparse.Namespace) -> None:
     model = model.to(args.device)
 
     # Load pretrained weights
-    model.load_state_dict(torch.load(args.eval_checkpoint,map_location=args.device)['state_dict'])
+    model.load_state_dict(torch.load(args.eval_checkpoint, map_location=args.device, weights_only=False)['state_dict'])
 
     # Load data
     _, _, test_loader = build_dataloaders(args)

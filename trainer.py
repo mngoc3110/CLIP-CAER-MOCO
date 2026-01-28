@@ -12,12 +12,16 @@ from utils.loss import SemanticLDLLoss
 
 class Trainer:
     """A class that encapsulates the training and validation logic."""
-    def __init__(self, model, criterion, optimizer, scheduler, device,log_txt_path, 
-                 mi_criterion=None, lambda_mi=0, 
+    def __init__(self, model, criterion, optimizer, scheduler, device,log_txt_path,
+                 mi_criterion=None, lambda_mi=0,
                  dc_criterion=None, lambda_dc=0,
+                 moco_criterion=None, lambda_rank=0,
                  class_priors=None, logit_adj_tau=1.0,
                  mi_warmup=0, mi_ramp=0,
-                 dc_warmup=0, dc_ramp=0, use_amp=False, grad_clip=1.0, mixup_alpha=0.0):
+                 dc_warmup=0, dc_ramp=0,
+                 rank_warmup=0, rank_ramp=0,
+                 use_amp=False, grad_clip=1.0, mixup_alpha=0.0,
+                 gradient_accumulation_steps=1):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
@@ -29,15 +33,20 @@ class Trainer:
         self.lambda_mi = lambda_mi
         self.dc_criterion = dc_criterion
         self.lambda_dc = lambda_dc
+        self.moco_criterion = moco_criterion
+        self.lambda_rank = lambda_rank
         self.class_priors = class_priors
         self.logit_adj_tau = logit_adj_tau
         self.mi_warmup = mi_warmup
         self.mi_ramp = mi_ramp
         self.dc_warmup = dc_warmup
         self.dc_ramp = dc_ramp
+        self.rank_warmup = rank_warmup
+        self.rank_ramp = rank_ramp
         self.use_amp = use_amp
         self.grad_clip = grad_clip
         self.mixup_alpha = mixup_alpha
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
         
@@ -91,6 +100,7 @@ class Trainer:
         losses = AverageMeter('Loss', ':.4e')
         mi_losses = AverageMeter('MI Loss', ':.4e')
         dc_losses = AverageMeter('DC Loss', ':.4e')
+        moco_losses = AverageMeter('MoCo Loss', ':.4e')
         war_meter = AverageMeter('WAR', ':6.2f')
         
         progress_meters = [losses, war_meter]
@@ -98,6 +108,8 @@ class Trainer:
             progress_meters.insert(1, mi_losses)
         if self.dc_criterion is not None:
             progress_meters.insert(2, dc_losses)
+        if self.moco_criterion is not None:
+            progress_meters.insert(-1, moco_losses)
 
         progress = ProgressMeter(
             len(loader), 
@@ -110,6 +122,16 @@ class Trainer:
         all_targets = []
         saved_images_count = 0
 
+        # Zero grad once at the start for gradient accumulation
+        if is_train:
+            self.optimizer.zero_grad()
+            # Print loss weights for transparency
+            mi_w = get_loss_weight(int(epoch_str), self.mi_warmup, self.mi_ramp, self.lambda_mi)
+            dc_w = get_loss_weight(int(epoch_str), self.dc_warmup, self.dc_ramp, self.lambda_dc)
+            rank_w = get_loss_weight(int(epoch_str), self.rank_warmup, self.rank_ramp, self.lambda_rank)
+            print(f"--- Loss Weights for Epoch {epoch_str} ---")
+            print(f"MI: {mi_w:.4f} | DC: {dc_w:.4f} | MoCoRank: {rank_w:.4f}")
+            print("---------------------------------------")
 
         context = torch.enable_grad() if is_train else torch.no_grad()
         
@@ -129,7 +151,7 @@ class Trainer:
 
                 with torch.cuda.amp.autocast(enabled=self.use_amp):
                     # Forward pass
-                    output, learnable_text_features, hand_crafted_text_features = self.model(images_face, images_body)
+                    output, learnable_text_features, hand_crafted_text_features, video_features = self.model(images_face, images_body)
                     
                     # For MI and DC losses, if using prompt ensembling, average the learnable_text_features
                     processed_learnable_text_features = learnable_text_features
@@ -169,20 +191,43 @@ class Trainer:
                         loss += dc_weight * dc_loss
                         dc_losses.update(dc_loss.item(), target.size(0))
 
+                    # MoCoRank Loss
+                    if is_train and self.moco_criterion is not None:
+                        if hasattr(self.model, 'current_queue'):
+                            rank_weight = get_loss_weight(int(epoch_str), self.rank_warmup, self.rank_ramp, self.lambda_rank)
+                            if rank_weight > 0:
+                                moco_loss = self.moco_criterion(
+                                    video_features,
+                                    processed_learnable_text_features,
+                                    target,
+                                    self.model.current_queue.detach()
+                                )
+                                loss += rank_weight * moco_loss
+                                moco_losses.update(moco_loss.item(), target.size(0))
+
                 if is_train:
-                    self.optimizer.zero_grad()
+                    # Divide loss by gradient accumulation steps
+                    scaled_loss = loss / self.gradient_accumulation_steps
+
                     if self.use_amp:
-                        self.scaler.scale(loss).backward()
-                        if self.grad_clip > 0:
-                            self.scaler.unscale_(self.optimizer)
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
+                        self.scaler.scale(scaled_loss).backward()
                     else:
-                        loss.backward()
+                        scaled_loss.backward()
+
+                    # Update weights only when accumulated enough steps
+                    if (i + 1) % self.gradient_accumulation_steps == 0:
                         if self.grad_clip > 0:
+                            if self.use_amp:
+                                self.scaler.unscale_(self.optimizer)
                             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                        self.optimizer.step()
+
+                        if self.use_amp:
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                        else:
+                            self.optimizer.step()
+
+                        self.optimizer.zero_grad()
 
                 # Record metrics
                 preds = output.argmax(dim=1)
